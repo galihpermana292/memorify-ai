@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pkl
+*.db
+*.sqlite3
+
+# Virtual environments
+venv/
+.env
+.env.*
+.venv/
+ENV/
+env.bak/
+env/
+
+# Jupyter / Colab
+.ipynb_checkpoints/
+*.ipynb
+.colab/
+
+
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+data/
+*.sql
+*.dump

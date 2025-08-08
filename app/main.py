@@ -5,12 +5,20 @@ import uvicorn
 
 from app.config.settings import settings
 from app.delivery.api.computer_vision import router
+from app.domain.yolo_processor import YOLOProcessor
+from app.domain.template_service import TemplateService
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("🚀 Starting ML Service...")
+    print("Loading YOLO model...")
+    yolo_processor = YOLOProcessor() # This will trigger the download/load
+    app.state.template_service = TemplateService(yolo=yolo_processor)
+    print("✅ Model loaded and service is ready.")
+    
     yield
+    
     print("🛑 Shutting down ML Service...")
 
 

@@ -99,7 +99,7 @@ def fallback_center_crop(image_rgba, target_w, target_h):
     target_ratio = target_w / target_h
 
     center_x, center_y = img_width // 2, img_height // 2
-
+    
     if img_width / img_height >= target_ratio:
         crop_h = img_height
         crop_w = int(crop_h * target_ratio)

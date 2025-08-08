@@ -4,17 +4,13 @@ from contextlib import asynccontextmanager
 import uvicorn
 
 from app.config.settings import settings
-from app.config.database import init_db
 from app.delivery.api.computer_vision import router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
     print("🚀 Starting ML Service...")
-    await init_db()
     yield
-    # Shutdown
     print("🛑 Shutting down ML Service...")
 
 

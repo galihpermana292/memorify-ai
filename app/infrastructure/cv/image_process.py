@@ -6,19 +6,20 @@ import time
 from svgpathtools import parse_path
 import random
 
-# ====== Utility: Sample SVG path into polygon points ======
 def sample_svg_path(svg_path_data, num_points=200):
+    """Converts SVG path to polygon points for mask creation"""
     path = parse_path(svg_path_data)
     return [(p.real, p.imag) for p in [path.point(i / num_points) for i in range(num_points + 1)]]
 
-# ====== Utility: Group and merge detected person boxes ======
 def group_and_merge_boxes(person_boxes, threshold_factor=1.5):
+    """Merges nearby person detection boxes into larger groups"""
     if not person_boxes:
         return []
 
     num_boxes = len(person_boxes)
     adj = [[] for _ in range(num_boxes)]
 
+    # Build adjacency list based on box distances
     for i in range(num_boxes):
         for j in range(i + 1, num_boxes):
             box1, box2 = person_boxes[i], person_boxes[j]
@@ -31,6 +32,7 @@ def group_and_merge_boxes(person_boxes, threshold_factor=1.5):
                 adj[i].append(j)
                 adj[j].append(i)
 
+    # Find connected components using DFS
     visited, groups = [False] * num_boxes, []
     for i in range(num_boxes):
         if not visited[i]:
@@ -45,6 +47,7 @@ def group_and_merge_boxes(person_boxes, threshold_factor=1.5):
                         stack.append(v)
             groups.append(current_group_indices)
 
+    # Merge boxes in each group
     merged_boxes = []
     for group_indices in groups:
         min_x1, min_y1 = float('inf'), float('inf')
@@ -58,8 +61,8 @@ def group_and_merge_boxes(person_boxes, threshold_factor=1.5):
         merged_boxes.append([min_x1, min_y1, max_x2, max_y2])
     return merged_boxes
 
-# ====== Smart crop using YOLO detection ======
 def smart_crop_with_yolo(model, input_image_cv, target_w=375, target_h=375, fallback_threshold=0.30):
+    """Intelligently crops image to focus on detected persons using YOLO"""
     if model is None or input_image_cv is None:
         return None
 
@@ -89,8 +92,8 @@ def smart_crop_with_yolo(model, input_image_cv, target_w=375, target_h=375, fall
 
     return pad_to_target_aspect(cropped_image_rgb, target_w, target_h, base_image=img_rgb)
 
-# ====== Fallback center crop ======
 def fallback_center_crop(image_rgba, target_w, target_h):
+    """Performs center crop when person detection fails"""
     img_rgb = cv2.cvtColor(image_rgba, cv2.COLOR_RGBA2RGB)
     img_height, img_width, _ = img_rgb.shape
     target_ratio = target_w / target_h
@@ -112,8 +115,8 @@ def fallback_center_crop(image_rgba, target_w, target_h):
     cropped = img_rgb[y1:y2, x1:x2]
     return pad_to_target_aspect(cropped, target_w, target_h, base_image=img_rgb)
 
-# ====== Pad image to target aspect ratio ======
 def pad_to_target_aspect(image_rgb, target_w, target_h, base_image=None):
+    """Pads image to match target aspect ratio"""
     target_ratio = target_w / target_h
     h, w = image_rgb.shape[:2]
     current_ratio = w / h
@@ -149,13 +152,26 @@ def pad_to_target_aspect(image_rgb, target_w, target_h, base_image=None):
     )
     return padded
 
-# ====== Insert photos into frame using SVG mask ======
 def insert_photos_with_svg_mask(frame_path, cropped_photos_pil, slots, svg_path_groups):
+    """Inserts photos into frame using SVG masks from file path"""
     try:
         frame = Image.open(frame_path).convert("RGBA")
     except FileNotFoundError:
         return None
 
+    return _process_photo_insertion(frame, cropped_photos_pil, slots, svg_path_groups)
+
+def insert_photos_with_svg_mask_new(frame_image_cv, cropped_photos_pil, slots, svg_path_groups):
+    """Inserts photos into frame using SVG masks from CV image"""
+    try:
+        frame = Image.fromarray(cv2.cvtColor(frame_image_cv, cv2.COLOR_BGR2RGB)).convert("RGBA")
+    except Exception:
+        return None
+
+    return _process_photo_insertion(frame, cropped_photos_pil, slots, svg_path_groups)
+
+def _process_photo_insertion(frame, cropped_photos_pil, slots, svg_path_groups):
+    """Helper function for photo insertion with SVG masking"""
     for i, (photo_pil, slot) in enumerate(zip(cropped_photos_pil, slots)):
         target_w = int(slot["w"])
         target_h = int(slot["h"])

@@ -1,15 +1,14 @@
-from fastapi import APIRouter, Depends, UploadFile
-from sqlalchemy.ext.asyncio import AsyncSession
-from app.config.database import get_db
+from fastapi import APIRouter
 from app.domain.yolo_processor import YOLOProcessor
 from app.domain.template_service import TemplateService
+from app.delivery.schemas.body import TemplateData
 
 router = APIRouter()
 
-@router.post("/process-template/{template_id}")
-async def process_template(template_id: str, files: list[UploadFile], db: AsyncSession = Depends(get_db)):
+@router.post("/process-template")
+async def process_template(template_data: TemplateData):
     yolo = YOLOProcessor()
-    service = TemplateService(db, yolo)
-    images = [await f.read() for f in files]
-    result_paths = await service.process_template(template_id, images)
+    service = TemplateService(yolo)
+    
+    result_paths = await service.process_template(template_data)
     return {"output_files": result_paths}

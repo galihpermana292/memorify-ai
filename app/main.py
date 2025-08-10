@@ -33,7 +33,11 @@ app = FastAPI(
     redoc_url="/redoc" if settings.ENVIRONMENT != "production" else None,
 )
 
-app.mount("/images-scrapbook", StaticFiles(directory="image-scrapbook"), name="images-scrapbook")
+app.mount(
+    "/images-scrapbook", 
+    StaticFiles(directory="/images-scrapbook"), 
+    name="images-scrapbook"
+)
 
 # Setup CORS
 app.add_middleware(

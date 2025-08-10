@@ -13,6 +13,7 @@ from app.domain.template_service import TemplateService
 async def lifespan(app: FastAPI):
     print("🚀 Starting ML Service...")
     print("Loading YOLO model...")
+    
     yolo_processor = YOLOProcessor() # This will trigger the download/load
     app.state.template_service = TemplateService(yolo=yolo_processor)
     print("✅ Model loaded and service is ready.")

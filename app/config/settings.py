@@ -11,6 +11,10 @@ class Settings(BaseSettings):
 
     # ML Models
     YOLO_MODEL_PATH: str = "models/yolov10x.pt"
+    
+    # Authentication
+    BASIC_AUTH_USERNAME: str = "admin"
+    BASIC_AUTH_PASSWORD: str = "secret"
 
     # Templates
     TEMPLATES_DIR: str = "templates"

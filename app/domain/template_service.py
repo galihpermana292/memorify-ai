@@ -3,6 +3,7 @@ import base64
 import requests
 import numpy as np
 import cv2
+from pathlib import Path
 from PIL import Image
 from typing import List, Dict, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -84,7 +85,7 @@ class TemplateService:
         cropped_for_page: List[Image.Image],
         slots: List[Slot],
         svg_groups: List[List[str]],
-        out_name: str,
+        out_id: str,
     ) -> Tuple[int, str]:
         frame_cv = self._decode_cv(frame_bytes, cv2.IMREAD_COLOR)
         final_pil = insert_photos_with_svg_mask_new(
@@ -96,7 +97,7 @@ class TemplateService:
         if final_pil is None:
             raise ValueError("Compositing failed")
         ext = SAVE_FORMAT.lower()
-        out_path = os.path.join("image-scrapbook", f"{out_name}_page_{index_str}.{ext}")
+        out_path = os.path.join("image-scrapbook", f"{out_id}_page_{index_str}.{ext}")
 
         if ext == "jpg" or ext == "jpeg":
             # Convert to RGB, ensure no alpha
@@ -108,7 +109,7 @@ class TemplateService:
             return (int(index_str), out_path)
 
     def process_template(self, template_data: TemplateData):
-        out_name = template_data.name or template_data.id
+        out_id = template_data.id
 
         # Build global slot order and per-page mapping
         page_keys_sorted = sorted(template_data.frame_images.keys(), key=lambda k: int(k))
@@ -144,13 +145,13 @@ class TemplateService:
                 svg_groups = template_data.frame_images[k].svg_paths
                 # schedule
                 jobs.append((k, ex.submit(
-                    self._composite_one_page, k, frame_b, cropped_for_page, slots, svg_groups, out_name
+                    self._composite_one_page, k, frame_b, cropped_for_page, slots, svg_groups, out_id
                 )))
 
             for k, fut in jobs:
                 try:
                     page_idx, out_path = fut.result()
-                    results["pages"].append({"index": page_idx, "output_path": out_path})
+                    results["pages"].append({"index": page_idx, "output_path": Path(out_path).as_posix()})
                 except Exception as e:
                     results["errors"].append({"index": int(k), "error": str(e)})
 

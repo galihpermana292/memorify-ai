@@ -3,6 +3,7 @@ from PIL import Image, ImageDraw
 import numpy as np
 import os
 import time
+import torch
 from svgpathtools import parse_path
 import random
 
@@ -67,7 +68,8 @@ def smart_crop_with_yolo(model, input_image_cv, target_w=375, target_h=375, fall
         return None
 
     img_rgb = cv2.cvtColor(input_image_cv, cv2.COLOR_RGBA2RGB)
-    results = model(img_rgb, verbose=False)
+    with torch.no_grad():
+        results = model(img_rgb, verbose=False)
 
     person_boxes = [box.xyxy[0].cpu().numpy() for box in results[0].boxes if model.names[int(box.cls[0])] == 'person']
 

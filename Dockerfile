@@ -13,15 +13,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxext6 \
     libxrender1 \
     libgomp1 \
-    && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN python -m pip install --upgrade pip && \
-    pip install -r requirements.txt
+RUN python -m pip install --upgrade pip && pip install -r requirements.txt
 
 COPY . .
 
-EXPOSE 8080
+EXPOSE 80
 
-# Define the command to run your app when the container starts
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "80"]
+CMD ["uvicorn", "app.main:app", "--host", "::", "--port", "80"]

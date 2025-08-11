@@ -1,5 +1,4 @@
-from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import uvicorn
@@ -31,12 +30,6 @@ app = FastAPI(
     lifespan=lifespan,
     docs_url="/docs" if settings.ENVIRONMENT != "production" else None,
     redoc_url="/redoc" if settings.ENVIRONMENT != "production" else None,
-)
-
-app.mount(
-    "/images-scrapbook", 
-    StaticFiles(directory="/images-scrapbook"), 
-    name="images-scrapbook"
 )
 
 # Setup CORS
@@ -73,3 +66,11 @@ if __name__ == "__main__":
         port=80,
         reload=True
     )
+
+@app.get("/health/cloudinary")
+def cloudinary_health():
+    if not (settings.CLOUDINARY_URL or (
+        settings.CLOUDINARY_CLOUD_NAME and settings.CLOUDINARY_API_KEY and settings.CLOUDINARY_API_SECRET
+    )):
+        raise HTTPException(500, "Cloudinary credentials not configured")
+    return {"status": "ok"}

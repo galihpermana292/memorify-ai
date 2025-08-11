@@ -3,10 +3,11 @@ import base64
 import requests
 import numpy as np
 import cv2
-from pathlib import Path
+import traceback
 from PIL import Image
 from typing import List, Dict, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from app.infrastructure.cloudinary.upload_file import upload_pil_image
 
 from app.delivery.schemas.body import TemplateData, PageData, Slot
 from app.domain.yolo_processor import YOLOProcessor
@@ -96,17 +97,19 @@ class TemplateService:
         )
         if final_pil is None:
             raise ValueError("Compositing failed")
+        
         ext = SAVE_FORMAT.lower()
-        out_path = os.path.join("image-scrapbook", f"{out_id}_page_{index_str}.{ext}")
+        public_id = f"{out_id}_page_{index_str}"
 
-        if ext == "jpg" or ext == "jpeg":
-            # Convert to RGB, ensure no alpha
-            rgb = final_pil.convert("RGB")
-            rgb.save(out_path, format="JPEG", quality=JPEG_QUALITY, optimize=True)
-            return (int(index_str), out_path)
-        else:
-            final_pil.save(out_path)  # PNG path if you really need alpha
-            return (int(index_str), out_path)
+        # Upload directly to Cloudinary
+        url = upload_pil_image(
+            final_pil,
+            public_id=public_id,
+            folder="images-scrapbook",
+            fmt=ext,
+            quality=JPEG_QUALITY
+        )
+        return (int(index_str), url)
 
     def process_template(self, template_data: TemplateData):
         out_id = template_data.id
@@ -150,10 +153,14 @@ class TemplateService:
 
             for k, fut in jobs:
                 try:
-                    page_idx, out_path = fut.result()
-                    results["pages"].append({"index": page_idx, "output_path": Path(out_path).as_posix()})
+                    page_idx, url = fut.result()
+                    results["pages"].append({"index": page_idx, "url": url})
                 except Exception as e:
-                    results["errors"].append({"index": int(k), "error": str(e)})
+                    results["errors"].append({
+                        "index": int(k),
+                        "error": f"{type(e).__name__}: {e}",
+                        "trace": traceback.format_exc()
+                    })
 
         # sort pages by index for tidy output
         results["pages"].sort(key=lambda x: x["index"])

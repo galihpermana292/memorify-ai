@@ -24,7 +24,6 @@ def verify_basic_auth(creds: HTTPBasicCredentials = Depends(security)) -> None:
 
 @router.post("/process-template", dependencies=[Depends(verify_basic_auth)])
 async def process_template(request: Request, template_data: TemplateData):
-    print("request payload", template_data)
     service = request.app.state.template_service
     result_paths = await run_in_threadpool(service.process_template, template_data)
 

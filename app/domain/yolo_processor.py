@@ -37,10 +37,10 @@ class YOLOProcessor:
 
     def _download_model(self, dest_path: str):
         import urllib.request
-        url = "https://github.com/ultralytics/assets/releases/download/v8.2.0/yolov10x.pt"
+        url = "https://github.com/ultralytics/assets/releases/download/v8.2.0/yolov8n.pt"
         urllib.request.urlretrieve(url, dest_path)
 
     def crop_person(self, image_cv, target_w, target_h):
         # Expect BGR coming in
-        from app.infrastructure.cv.image_process import smart_crop_with_yolo
-        return smart_crop_with_yolo(self.model, image_cv, target_w, target_h)
+        from app.infrastructure.cv.image_process import smart_crop_for_template
+        return smart_crop_for_template(self.model, image_cv, target_w, target_h)

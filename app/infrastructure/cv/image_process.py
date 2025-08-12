@@ -1,198 +1,124 @@
+# app/infrastructure/cv/image_process.py
 import cv2
 from PIL import Image, ImageDraw
 import numpy as np
-import os
-import time
-import torch
 from svgpathtools import parse_path
-import random
+from ultralytics import YOLO
 
 def sample_svg_path(svg_path_data, num_points=200):
-    """Converts SVG path to polygon points for mask creation"""
     path = parse_path(svg_path_data)
     return [(p.real, p.imag) for p in [path.point(i / num_points) for i in range(num_points + 1)]]
 
-def group_and_merge_boxes(person_boxes, threshold_factor=1.5):
-    """Merges nearby person detection boxes into larger groups"""
-    if not person_boxes:
-        return []
+def calculate_crop_coords(image_size, base_box, anchor_point, target_aspect_ratio):
+    img_width, img_height = image_size
+    box_w = base_box[2] - base_box[0]
+    box_h = base_box[3] - base_box[1]
+    box_area_ratio = (box_w * box_h) / (img_width * img_height)
 
-    num_boxes = len(person_boxes)
-    adj = [[] for _ in range(num_boxes)]
+    adaptive_padding = np.interp(box_area_ratio, [0.05, 0.5], [1.2, 1.05])
 
-    # Build adjacency list based on box distances
-    for i in range(num_boxes):
-        for j in range(i + 1, num_boxes):
-            box1, box2 = person_boxes[i], person_boxes[j]
-            center1_x, center1_y = (box1[0] + box1[2]) / 2, (box1[1] + box1[3]) / 2
-            center2_x, center2_y = (box2[0] + box2[2]) / 2, (box2[1] + box2[3]) / 2
-            width1, width2 = box1[2] - box1[0], box2[2] - box2[0]
-            distance = np.sqrt((center1_x - center2_x) ** 2 + (center1_y - center2_y) ** 2)
-            distance_threshold = threshold_factor * (width1 + width2) / 2
-            if distance < distance_threshold:
-                adj[i].append(j)
-                adj[j].append(i)
+    crop_w_base = box_w * adaptive_padding
+    crop_h_base = box_h * adaptive_padding
+    current_aspect_ratio = crop_w_base / crop_h_base
 
-    # Find connected components using DFS
-    visited, groups = [False] * num_boxes, []
-    for i in range(num_boxes):
-        if not visited[i]:
-            current_group_indices, stack = [], [i]
-            visited[i] = True
-            while stack:
-                u = stack.pop()
-                current_group_indices.append(u)
-                for v in adj[u]:
-                    if not visited[v]:
-                        visited[v] = True
-                        stack.append(v)
-            groups.append(current_group_indices)
+    if current_aspect_ratio > target_aspect_ratio:
+        new_h = crop_w_base / target_aspect_ratio
+        new_w = crop_w_base
+    else:
+        new_w = crop_h_base * target_aspect_ratio
+        new_h = crop_h_base
 
-    # Merge boxes in each group
-    merged_boxes = []
-    for group_indices in groups:
-        min_x1, min_y1 = float('inf'), float('inf')
-        max_x2, max_y2 = float('-inf'), float('-inf')
-        for index in group_indices:
-            box = person_boxes[index]
-            min_x1 = min(min_x1, box[0])
-            min_y1 = min(min_y1, box[1])
-            max_x2 = max(max_x2, box[2])
-            max_y2 = max(max_y2, box[3])
-        merged_boxes.append([min_x1, min_y1, max_x2, max_y2])
-    return merged_boxes
+    anchor_x, anchor_y = anchor_point
+    adjusted_anchor_y = anchor_y - new_h * 0.1
 
-def smart_crop_with_yolo(model, input_image_cv, target_w=375, target_h=375, fallback_threshold=0.30):
-    """Intelligently crops image to focus on detected persons using YOLO"""
-    if model is None or input_image_cv is None:
-        return None
+    crop_x1 = max(0, anchor_x - new_w / 2)
+    crop_y1 = max(0, adjusted_anchor_y - new_h / 2)
+    crop_x2 = min(img_width, crop_x1 + new_w)
+    crop_y2 = min(img_height, crop_y1 + new_h)
 
-    img_rgb = cv2.cvtColor(input_image_cv, cv2.COLOR_RGBA2RGB)
-    with torch.no_grad():
-        results = model(img_rgb, verbose=False)
+    return (int(crop_x1), int(crop_y1), int(crop_x2), int(crop_y2))
 
-    person_boxes = [box.xyxy[0].cpu().numpy() for box in results[0].boxes if model.names[int(box.cls[0])] == 'person']
-
-    if not person_boxes:
-        return pad_to_target_aspect(img_rgb, target_w, target_h)
-
-    merged_boxes = group_and_merge_boxes(person_boxes)
-    largest_box = max(merged_boxes, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))
-    x1, y1, x2, y2 = map(int, largest_box)
-
-    cropped_image_rgb = img_rgb[y1:y2, x1:x2]
-    if cropped_image_rgb.size == 0:
-        return pad_to_target_aspect(img_rgb, target_w, target_h)
-
-    actual_crop_h, actual_crop_w = cropped_image_rgb.shape[:2]
-    actual_crop_ratio = actual_crop_w / actual_crop_h
+def fallback_center_crop(image_pil, target_w, target_h):
+    img_width, img_height = image_pil.size
     target_ratio = target_w / target_h
+    img_ratio = img_width / img_height
 
-    deviation = abs(actual_crop_ratio - target_ratio)
-    if deviation > fallback_threshold:
-        return fallback_center_crop(input_image_cv, target_w, target_h)
+    if img_ratio > target_ratio:
+        new_width = int(target_ratio * img_height)
+        left = (img_width - new_width) / 2
+        top = 0
+        right = left + new_width
+        bottom = img_height
+    else:
+        new_height = int(img_width / target_ratio)
+        left = 0
+        top = (img_height - new_height) / 2
+        right = img_width
+        bottom = top + new_height
 
-    return pad_to_target_aspect(cropped_image_rgb, target_w, target_h, base_image=img_rgb)
+    cropped_img = image_pil.crop((left, top, right, bottom))
+    return np.array(cropped_img)
 
-def fallback_center_crop(image_rgba, target_w, target_h):
-    """Performs center crop when person detection fails"""
-    img_rgb = cv2.cvtColor(image_rgba, cv2.COLOR_RGBA2RGB)
-    img_height, img_width, _ = img_rgb.shape
-    target_ratio = target_w / target_h
+def smart_crop_for_template(pose_model: YOLO, input_image_cv: np.ndarray, target_w: int, target_h: int) -> np.ndarray:
+    if pose_model is None or input_image_cv is None:
+        raise ValueError("Model atau gambar input tidak valid.")
 
-    center_x, center_y = img_width // 2, img_height // 2
+    img_pil = Image.fromarray(cv2.cvtColor(input_image_cv, cv2.COLOR_BGR2RGB))
+    results = pose_model(img_pil, verbose=False, classes=[0]) 
+    result = results[0]
+
+    if len(result.boxes) == 0:
+        return fallback_center_crop(img_pil, target_w, target_h)
+
+    all_boxes = result.boxes.xyxy.cpu().numpy()
+    min_x1, min_y1 = np.min(all_boxes[:, :2], axis=0)
+    max_x2, max_y2 = np.max(all_boxes[:, 2:], axis=0)
+    mega_box = np.array([min_x1, min_y1, max_x2, max_y2])
+    mega_anchor_x, mega_anchor_y = (min_x1 + max_x2) / 2, (min_y1 + max_y2) / 2
+    target_aspect_ratio = target_w / target_h
+
+    crop_coords = calculate_crop_coords(img_pil.size, mega_box, (mega_anchor_x, mega_anchor_y), target_aspect_ratio)
+    cropped_pil = img_pil.crop(crop_coords)
     
-    if img_width / img_height >= target_ratio:
-        crop_h = img_height
-        crop_w = int(crop_h * target_ratio)
-    else:
-        crop_w = img_width
-        crop_h = int(crop_w / target_ratio)
+    return cv2.cvtColor(np.array(cropped_pil), cv2.COLOR_RGB2BGR)
 
-    x1 = max(0, center_x - crop_w // 2)
-    y1 = max(0, center_y - crop_h // 2)
-    x2 = min(x1 + crop_w, img_width)
-    y2 = min(y1 + crop_h, img_height)
-
-    cropped = img_rgb[y1:y2, x1:x2]
-    return pad_to_target_aspect(cropped, target_w, target_h, base_image=img_rgb)
-
-def pad_to_target_aspect(image_rgb, target_w, target_h, base_image=None):
-    """Pads image to match target aspect ratio"""
+def crop_to_fill(image_pil: Image.Image, target_w: int, target_h: int) -> Image.Image:
+    source_w, source_h = image_pil.size
     target_ratio = target_w / target_h
-    h, w = image_rgb.shape[:2]
-    current_ratio = w / h
+    source_ratio = source_w / source_h
 
-    if abs(current_ratio - target_ratio) < 1e-2:
-        return image_rgb
-
-    if current_ratio > target_ratio:
-        new_w = w
-        new_h = int(w / target_ratio)
+    if source_ratio > target_ratio:
+        scale_factor = target_h / source_h
+        scaled_w = int(source_w * scale_factor)
+        scaled_h = target_h
+        resized_image = image_pil.resize((scaled_w, scaled_h), Image.Resampling.LANCZOS)
+        crop_x = (scaled_w - target_w) / 2
+        return resized_image.crop((crop_x, 0, crop_x + target_w, scaled_h))
     else:
-        new_h = h
-        new_w = int(h * target_ratio)
+        scale_factor = target_w / source_w
+        scaled_w = target_w
+        scaled_h = int(source_h * scale_factor)
+        resized_image = image_pil.resize((scaled_w, scaled_h), Image.Resampling.LANCZOS)
+        crop_y = (scaled_h - target_h) / 2
+        return resized_image.crop((0, crop_y, scaled_w, crop_y + target_h))
 
-    pad_top = (new_h - h) // 2
-    pad_bottom = new_h - h - pad_top
-    pad_left = (new_w - w) // 2
-    pad_right = new_w - w - pad_left
+def insert_photos_with_svg_mask(frame_pil: Image.Image, cropped_photos_pil: list, slots: list, svg_path_groups: list) -> Image.Image:
+    final_frame = frame_pil.copy()
 
-    if base_image is not None:
-        try:
-            replicated = cv2.copyMakeBorder(
-                image_rgb, pad_top, pad_bottom, pad_left, pad_right,
-                borderType=cv2.BORDER_REPLICATE
-            )
-            return replicated
-        except:
-            pass
-
-    padded = cv2.copyMakeBorder(
-        image_rgb, pad_top, pad_bottom, pad_left, pad_right,
-        borderType=cv2.BORDER_CONSTANT, value=(0, 0, 0, 0)
-    )
-    return padded
-
-def insert_photos_with_svg_mask(frame_path, cropped_photos_pil, slots, svg_path_groups):
-    """Inserts photos into frame using SVG masks from file path"""
-    try:
-        frame = Image.open(frame_path).convert("RGBA")
-    except FileNotFoundError:
-        return None
-
-    return _process_photo_insertion(frame, cropped_photos_pil, slots, svg_path_groups)
-
-def insert_photos_with_svg_mask_new(frame_image_cv, cropped_photos_pil, slots, svg_path_groups):
-    """Inserts photos into frame using SVG masks from CV image"""
-    try:
-        frame = Image.fromarray(cv2.cvtColor(frame_image_cv, cv2.COLOR_BGR2RGB)).convert("RGBA")
-    except Exception:
-        return None
-
-    return _process_photo_insertion(frame, cropped_photos_pil, slots, svg_path_groups)
-
-def _process_photo_insertion(frame, cropped_photos_pil, slots, svg_path_groups):
-    """Helper function for photo insertion with SVG masking"""
     for i, (photo_pil, slot) in enumerate(zip(cropped_photos_pil, slots)):
-        target_w = int(slot["w"])
-        target_h = int(slot["h"])
-        paste_x = int(slot["x"])
-        paste_y = int(slot["y"])
+        paste_position = (int(slot["x"]), int(slot["y"]))
+        target_w, target_h = int(slot["w"]), int(slot["h"])
 
-        resized_photo = photo_pil.resize((target_w, target_h), Image.Resampling.LANCZOS)
+        final_photo = crop_to_fill(photo_pil, target_w, target_h)
 
         if i < len(svg_path_groups) and svg_path_groups[i]:
-            combined_mask = Image.new("L", (target_w, target_h), 0)
-            draw = ImageDraw.Draw(combined_mask)
-            for svg_path_data in svg_path_groups[i]:
-                polygon = sample_svg_path(svg_path_data)
+            mask = Image.new("L", final_photo.size, 0)
+            draw = ImageDraw.Draw(mask)
+            for svg_path in svg_path_groups[i]:
+                polygon = sample_svg_path(svg_path)
                 draw.polygon(polygon, fill=255)
-
-            masked_photo = Image.new("RGBA", (target_w, target_h))
-            masked_photo.paste(resized_photo, (0, 0), mask=combined_mask)
-            frame.paste(masked_photo, (paste_x, paste_y), mask=masked_photo.split()[3])
+            final_frame.paste(final_photo, paste_position, mask=mask)
         else:
-            frame.paste(resized_photo, (paste_x, paste_y))
+            final_frame.paste(final_photo, paste_position)
 
-    return frame
+    return final_frame

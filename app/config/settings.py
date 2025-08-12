@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     ALLOWED_HOSTS: List[str] = ["*"]
 
     # ML
-    YOLO_MODEL_PATH: str = "models/yolov10x.pt"
+    YOLO_MODEL_PATH: str = "models/yolov8n.pt"
 
     # Auth
     BASIC_AUTH_USERNAME: str = "admin"

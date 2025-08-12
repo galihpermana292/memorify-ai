@@ -1,22 +1,28 @@
 # app/domain/template_service.py
-from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Tuple
-import traceback, base64, requests, os
+import traceback, base64, requests, os, io
 import numpy as np, cv2
 from PIL import Image
 
+from app.delivery.schemas.body import TemplateData 
+
+from app.infrastructure.cv import image_process
+from app.infrastructure.cloudinary.upload_file import upload_pil_image
+from app.domain.yolo_processor import YOLOProcessor
+
+# --- KONFIGURASI OPTIMASI ---
 REQUEST_TIMEOUT = 15
 WORKERS_IO = 8
-WORKERS_CROP = 4          # keep modest; YOLO is heavy
-WORKERS_COMPOSITE = 3     # how many pages composite in parallel
-MAX_PAGES_IN_FLIGHT = 2   # cap memory: at most N pages in memory
+WORKERS_CROP = 6
+WORKERS_COMPOSITE = 3
 
-SAVE_FORMAT = "jpg"
+SAVE_FORMAT = "jpeg"
 JPEG_QUALITY = 88
 
 class TemplateService:
-    def __init__(self, yolo):
-        self.yolo = yolo
+    def __init__(self, yolo: YOLOProcessor):
+        self.yolo_processor = yolo
         os.makedirs("outputs", exist_ok=True)
 
     # ---------- IO helpers ----------
@@ -33,7 +39,7 @@ class TemplateService:
             return base64.b64decode(encoded + "===")
         return base64.b64decode(src + "===")
 
-    def _decode_cv(self, b: bytes, imread_flag=cv2.IMREAD_COLOR, max_side=1280):
+    def _decode_cv(self, b: bytes, imread_flag=cv2.IMREAD_COLOR, max_side=1024):
         arr = np.frombuffer(b, np.uint8)
         img = cv2.imdecode(arr, imread_flag)
         if img is None:
@@ -56,16 +62,30 @@ class TemplateService:
 
     # ---------- crop/composite ----------
     def _crop_one(self, img_bytes: bytes, slot) -> Image.Image:
-        img_cv = self._decode_cv(img_bytes, cv2.IMREAD_COLOR)
-        cropped_cv = self.yolo.crop_person(img_cv, slot.w, slot.h)  # uses no_grad, classes=[0], imgsz
+        img_cv = self._decode_cv(img_bytes) 
+        slot_dict = slot.model_dump()
+        
+        cropped_cv = self.yolo_processor.crop_person(
+            img_cv, int(slot_dict['w']), int(slot_dict['h'])
+        )
+        
         pil_img = Image.fromarray(cv2.cvtColor(cropped_cv, cv2.COLOR_BGR2RGB))
         del img_cv, cropped_cv
         return pil_img
 
     def _crop_photos_for_slots_parallel(self, images_bytes: List[bytes], slots) -> List[Image.Image]:
-        if len(images_bytes) < len(slots):
-            raise ValueError(f"Not enough images: need {len(slots)}, got {len(images_bytes)}")
-        tasks = list(zip(images_bytes[:len(slots)], slots))
+        num_slots = len(slots)
+        num_images = len(images_bytes)
+        
+        images_to_process = list(images_bytes) 
+
+        if num_images < num_slots:
+            print(f"⚠️ Jumlah gambar ({num_images}) lebih sedikit dari slot ({num_slots}). Gambar akan diduplikasi.")
+            for i in range(num_slots - num_images):
+                images_to_process.append(images_bytes[i % num_images])
+        
+        tasks = list(zip(images_to_process[:num_slots], slots))
+        
         out: List[Image.Image] = [None] * len(tasks)
         with ThreadPoolExecutor(max_workers=WORKERS_CROP) as ex:
             futs = {ex.submit(self._crop_one, img_b, slot): idx for idx, (img_b, slot) in enumerate(tasks)}
@@ -77,26 +97,24 @@ class TemplateService:
         self, index_str: str, frame_bytes: bytes,
         cropped_for_page: List[Image.Image], slots, svg_groups, out_id: str
     ) -> Tuple[int, str]:
-        from app.infrastructure.cv.image_process import insert_photos_with_svg_mask_new
-        from app.infrastructure.cloudinary.upload_file import upload_pil_image
-
-        frame_cv = self._decode_cv(frame_bytes, cv2.IMREAD_COLOR)
-        final_pil = insert_photos_with_svg_mask_new(
-            frame_cv, cropped_for_page, [s.model_dump() for s in slots], svg_groups
+        frame_pil = Image.open(io.BytesIO(frame_bytes)).convert("RGBA")
+        slots_as_dicts = [s.model_dump() for s in slots]
+        
+        final_pil = image_process.insert_photos_with_svg_mask(
+            frame_pil, cropped_for_page, slots_as_dicts, svg_groups
         )
-        del frame_cv
+        del frame_pil
 
         if final_pil is None:
-            # Free cropped images
             for im in cropped_for_page:
                 if im: im.close()
             raise ValueError("Compositing failed")
-
+        
+        # Upload ke Cloudinary
         public_id = f"{out_id}_page_{index_str}"
-        url = upload_pil_image(final_pil, public_id=public_id, folder="images-scrapbook",
+        url = upload_pil_image(final_pil.convert('RGB'), public_id=public_id, folder="images-scrapbook",
                                fmt=SAVE_FORMAT, quality=JPEG_QUALITY)
 
-        # free ASAP
         final_pil.close()
         for im in cropped_for_page:
             if im: im.close()
@@ -104,56 +122,45 @@ class TemplateService:
         return (int(index_str), url)
 
     # ---------- streaming pipeline ----------
-    def _process_one_page(self, k: str, template_data):
-        page = template_data.frame_images[k]
-        slots = page.photo_slots
-        n = len(slots)
-
-        # Take first N uploads for this page only (your upstream can map per page instead)
-        page_sources = template_data.uploaded_images[:n]
-        template_data.uploaded_images = template_data.uploaded_images[n:]
-
-        # Load + crop for this page
-        upload_bytes = self._load_many_bytes(page_sources)
-        cropped_for_page = self._crop_photos_for_slots_parallel(upload_bytes, slots)
-        # Free raw bytes
-        del upload_bytes
-
-        # Load the frame for this page
-        frame_bytes = self._load_image_bytes(page.frame_image_path)
-
-        # Composite and upload
-        return self._composite_one_page(
-            k, frame_bytes, cropped_for_page, slots, page.svg_paths, template_data.id
-        )
-
-    def process_template(self, template_data):
+    def process_template(self, template_data: TemplateData) -> Dict:
         results = {"run_id": template_data.id, "pages": [], "errors": []}
-        page_keys_sorted = sorted(template_data.frame_images.keys(), key=lambda k: int(k))
-
-        in_flight = []
+        page_keys_sorted = sorted(template_data.frame_images.keys(), key=int)
+        
+        all_slots = [slot for k in page_keys_sorted for slot in template_data.frame_images[k].photo_slots]
+        
+        all_uploaded_bytes = self._load_many_bytes(template_data.uploaded_images)
+        
+        print(f"Melakukan crop untuk {len(all_slots)} slot...")
+        all_cropped_photos = self._crop_photos_for_slots_parallel(all_uploaded_bytes, all_slots)
+        print("✅ Semua foto berhasil di-crop.")
+        
+        photo_cursor = 0
         with ThreadPoolExecutor(max_workers=WORKERS_COMPOSITE) as ex:
+            futs = []
             for k in page_keys_sorted:
-                # backpressure to cap RAM
-                while len(in_flight) >= MAX_PAGES_IN_FLIGHT:
-                    done, not_done = wait(in_flight, return_when=FIRST_COMPLETED)
-                    in_flight = list(not_done)
-                    for fut in done:
-                        try:
-                            page_idx, url = fut.result()
-                            results["pages"].append({"index": page_idx, "url": url})
-                        except Exception as e:
-                            results["errors"].append({"index": -1, "error": f"{type(e).__name__}: {e}"})
+                page_config = template_data.frame_images[k]
+                slots_on_page = page_config.photo_slots
+                num_slots = len(slots_on_page)
+                
+                photos_for_this_page = all_cropped_photos[photo_cursor : photo_cursor + num_slots]
+                photo_cursor += num_slots
+                
+                frame_bytes = self._load_image_bytes(page_config.frame_image_path)
+                
+                fut = ex.submit(
+                    self._composite_one_page,
+                    k, frame_bytes, photos_for_this_page, slots_on_page,
+                    page_config.svg_paths, template_data.id
+                )
+                futs.append(fut)
 
-                in_flight.append(ex.submit(self._process_one_page, k, template_data))
-
-            # drain remaining
-            for fut in as_completed(in_flight):
+            for fut in as_completed(futs):
                 try:
                     page_idx, url = fut.result()
                     results["pages"].append({"index": page_idx, "url": url})
                 except Exception as e:
-                    results["errors"].append({"index": -1, "error": f"{type(e).__name__}: {e}"})
+                    print(f"Error: {traceback.format_exc()}")
+                    results["errors"].append({"error": f"{type(e).__name__}: {e}"})
 
         results["pages"].sort(key=lambda x: x["index"])
         return results

@@ -1,6 +1,5 @@
 # app/delivery/api/computer_vision.py
 from fastapi import APIRouter, Request, Depends, HTTPException, status
-from fastapi.concurrency import run_in_threadpool
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from app.delivery.schemas.body import TemplateData
 from app.config.settings import settings
@@ -9,13 +8,12 @@ import logging
 
 router = APIRouter()
 security = HTTPBasic()
-logger = logging.getLogger("uvicorn.access")  # use uvicorn logger or create your own
+logger = logging.getLogger("uvicorn.access")
 
 def verify_basic_auth(creds: HTTPBasicCredentials = Depends(security)) -> None:
     ok_user = secrets.compare_digest(creds.username, settings.BASIC_AUTH_USERNAME)
     ok_pass = secrets.compare_digest(creds.password, settings.BASIC_AUTH_PASSWORD)
     if not (ok_user and ok_pass):
-        # Include the header so browsers/clients know to prompt for credentials
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",
@@ -25,6 +23,7 @@ def verify_basic_auth(creds: HTTPBasicCredentials = Depends(security)) -> None:
 @router.post("/process-template", dependencies=[Depends(verify_basic_auth)])
 async def process_template(request: Request, template_data: TemplateData):
     service = request.app.state.template_service
-    result_paths = await run_in_threadpool(service.process_template, template_data)
+    # --- DIUBAH: Panggil langsung dengan await ---
+    result = await service.process_template(template_data)
 
-    return {"output_files": result_paths}
+    return {"output_files": result}

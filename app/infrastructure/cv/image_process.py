@@ -64,9 +64,12 @@ def smart_crop_for_template(pose_model: YOLO, input_image_cv: np.ndarray, target
         raise ValueError("Model atau gambar input tidak valid.")
 
     img_pil = Image.fromarray(cv2.cvtColor(input_image_cv, cv2.COLOR_BGR2RGB))
+    
+    # Panggilan ini sekarang akan menggunakan OpenVINO di backend secara transparan
     results = pose_model(img_pil, verbose=False, classes=[0]) 
     result = results[0]
 
+    # ... Sisa fungsi ini tidak perlu diubah sama sekali ...
     if len(result.boxes) == 0:
         return fallback_center_crop(img_pil, target_w, target_h)
 

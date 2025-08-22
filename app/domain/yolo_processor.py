@@ -23,15 +23,7 @@ class YOLOProcessor:
         # Cek untuk file .xml DAN .bin. Keduanya wajib ada.
         expected_xml_file = os.path.join(openvino_model_dir, f"{model_name}.xml")
         expected_bin_file = os.path.join(openvino_model_dir, f"{model_name}.bin")
-
-        print("\n--- DEBUGGING PATHS ---")
-        print(f"Base model path: {os.path.abspath(base_model_path)}")
-        print(f"Checking for XML file at: {os.path.abspath(expected_xml_file)}")
-        print(f"Checking for BIN file at: {os.path.abspath(expected_bin_file)}")
-        print(f"XML exists? -> {os.path.exists(expected_xml_file)}")
-        print(f"BIN exists? -> {os.path.exists(expected_bin_file)}")
-        print("-----------------------\n")
-
+        
         # JIKA MODEL TIDAK LENGKAP (Logika Regenerasi)
         if not (os.path.exists(expected_xml_file) and os.path.exists(expected_bin_file)):
             print("Model OpenVINO tidak lengkap atau tidak ditemukan. Meregenerasi model...")

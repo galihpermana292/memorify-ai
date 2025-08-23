@@ -6,6 +6,13 @@ from ultralytics import YOLO
 
 class YOLOProcessor:
     _model_instance = None
+    
+    def warmup(self, imgsz: int = 320):
+        try:
+            from PIL import Image
+            _ = self.model.predict(Image.new("RGB", (imgsz, imgsz)), imgsz=imgsz, verbose=False, device=getattr(self, "_device", "cpu"))
+        except Exception:
+            pass
 
     def __init__(self):
         if YOLOProcessor._model_instance is None:

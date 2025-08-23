@@ -55,7 +55,6 @@ app.add_middleware(
 # Lazy-load only for API routes
 @app.middleware("http")
 async def lazy_boot(request: Request, call_next):
-    # Adjust if your API prefix differs
     if request.url.path.startswith(settings.API_V1_STR):
         _ensure_service(request.app)
     return await call_next(request)

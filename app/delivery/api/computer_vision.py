@@ -30,28 +30,24 @@ async def process_template(request: Request, template_data: TemplateData):
 
 @router.get("/warm")
 async def warm(request: Request):
- 
-    # triggers lazy init via middleware
     svc = getattr(request.app.state, "template_service", None)
     if svc is None:
-        # if middleware hasn’t run yet, force init here:
         from app.domain.yolo_processor import YOLOProcessor
         from app.domain.template_service import TemplateService
         yp = YOLOProcessor()
         request.app.state.template_service = TemplateService(yolo=yp)
         svc = request.app.state.template_service
 
+    warmed = False
     try:
-        # If you added YOLOProcessor.warmup():
         svc.yolo_processor.warmup(imgsz=320)
         warmed = True
-    except Exception:
-        # fallback warm via a direct predict call
-        try:
-            from PIL import Image
-            _ = svc.yolo_processor.model.predict(Image.new("RGB", (320, 320)), imgsz=320, verbose=False, device="cpu")
-            warmed = True
-        except Exception:
-            warmed = False
+    except Exception as e:
+        print(f"[warm] warmup failed: {e}")
+        warmed = False
 
-    return {"warmed": warmed}
+    return {
+        "status": "ok" if warmed else "error",
+        "model_loaded": warmed,
+        "message": "YOLO model is awake and ready" if warmed else "Failed to warm YOLO model"
+    }

@@ -57,19 +57,17 @@ def fallback_center_crop(image_pil, target_w, target_h):
         bottom = top + new_height
 
     cropped_img = image_pil.crop((left, top, right, bottom))
-    return np.array(cropped_img)
+    return cropped_img
 
-def smart_crop_for_template(pose_model: YOLO, input_image_cv: np.ndarray, target_w: int, target_h: int) -> np.ndarray:
+def smart_crop_for_template(pose_model: YOLO, input_image_cv: np.ndarray, target_w: int, target_h: int) -> Image.Image: # <-- Tipe return diubah ke Image.Image
     if pose_model is None or input_image_cv is None:
         raise ValueError("Model atau gambar input tidak valid.")
 
     img_pil = Image.fromarray(cv2.cvtColor(input_image_cv, cv2.COLOR_BGR2RGB))
     
-    # Panggilan ini sekarang akan menggunakan OpenVINO di backend secara transparan
-    results = pose_model(img_pil, imgsz=416, verbose=False, classes=[0]) # Coba 416 atau 320
+    results = pose_model(img_pil, imgsz=416, verbose=False, classes=[0])
     result = results[0]
 
-    # ... Sisa fungsi ini tidak perlu diubah sama sekali ...
     if len(result.boxes) == 0:
         return fallback_center_crop(img_pil, target_w, target_h)
 
@@ -83,7 +81,7 @@ def smart_crop_for_template(pose_model: YOLO, input_image_cv: np.ndarray, target
     crop_coords = calculate_crop_coords(img_pil.size, mega_box, (mega_anchor_x, mega_anchor_y), target_aspect_ratio)
     cropped_pil = img_pil.crop(crop_coords)
     
-    return cv2.cvtColor(np.array(cropped_pil), cv2.COLOR_RGB2BGR)
+    return cropped_pil
 
 def crop_to_fill(image_pil: Image.Image, target_w: int, target_h: int) -> Image.Image:
     source_w, source_h = image_pil.size

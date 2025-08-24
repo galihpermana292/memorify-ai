@@ -44,7 +44,7 @@ async def warm(request: Request):
 
     warmed = False
     try:
-        svc.yolo_processor.warmup(imgsz=320)
+        svc.yolo_processor.warmup(imgsz=416)
         warmed = True
     except Exception as e:
         logger.error(f"Pemanasan model gagal: {e}", exc_info=True)

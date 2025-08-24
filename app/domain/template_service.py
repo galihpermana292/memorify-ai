@@ -80,16 +80,15 @@ class TemplateService:
             return None
         
         slot_dict = slot.model_dump()
-        cropped_cv = None
         with self.yolo_lock:
-            cropped_cv = self.yolo_processor.crop_person(img_cv, int(slot_dict['w']), int(slot_dict['h']))
+            cropped_pil = self.yolo_processor.crop_person(img_cv, int(slot_dict['w']), int(slot_dict['h']))
 
-        if cropped_cv is None:
+        if cropped_pil is None:
+            logger.warning("Cropping gagal, mengembalikan None.")
             return None
             
-        pil_img = Image.fromarray(cv2.cvtColor(cropped_cv, cv2.COLOR_BGR2RGB))
-        del img_cv, cropped_cv
-        return pil_img
+        del img_cv
+        return cropped_pil
 
     async def _crop_photos_for_slots_parallel_async(self, images_bytes: List[bytes], slots) -> List[Image.Image]:
         num_slots = len(slots)

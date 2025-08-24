@@ -5,10 +5,12 @@ from app.delivery.schemas.body import TemplateData
 from app.config.settings import settings
 import secrets
 import logging
+import traceback
 
 router = APIRouter()
 security = HTTPBasic()
-logger = logging.getLogger("uvicorn.access")
+# Mengambil logger yang sudah ada yang dikonfigurasi oleh Uvicorn
+logger = logging.getLogger("uvicorn.error")
 
 def verify_basic_auth(creds: HTTPBasicCredentials = Depends(security)) -> None:
     ok_user = secrets.compare_digest(creds.username, settings.BASIC_AUTH_USERNAME)
@@ -22,32 +24,34 @@ def verify_basic_auth(creds: HTTPBasicCredentials = Depends(security)) -> None:
 
 @router.post("/process-template", dependencies=[Depends(verify_basic_auth)])
 async def process_template(request: Request, template_data: TemplateData):
-    service = request.app.state.template_service
-    result = await service.process_template(template_data)
-
-    return {"output_files": result}
-
+    try:
+        service = request.app.state.template_service
+        result = await service.process_template(template_data)
+        return {"output_files": result}
+    except Exception as e:
+        logger.error(f"Error tidak tertangani di endpoint process-template: {e}\n{traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Terjadi kesalahan internal pada server."
+        )
 
 @router.get("/warm")
 async def warm(request: Request):
     svc = getattr(request.app.state, "template_service", None)
+    # Logika _ensure_service di main.py akan menangani inisialisasi jika svc adalah None
     if svc is None:
-        from app.domain.yolo_processor import YOLOProcessor
-        from app.domain.template_service import TemplateService
-        yp = YOLOProcessor()
-        request.app.state.template_service = TemplateService(yolo=yp)
-        svc = request.app.state.template_service
+        return { "status": "error", "message": "Service is not initialized." }
 
     warmed = False
     try:
         svc.yolo_processor.warmup(imgsz=320)
         warmed = True
     except Exception as e:
-        print(f"[warm] warmup failed: {e}")
+        logger.error(f"Pemanasan model gagal: {e}", exc_info=True)
         warmed = False
 
     return {
         "status": "ok" if warmed else "error",
         "model_loaded": warmed,
-        "message": "YOLO model is awake and ready" if warmed else "Failed to warm YOLO model"
+        "message": "Model YOLO siap digunakan." if warmed else "Gagal melakukan pemanasan model."
     }

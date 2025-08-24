@@ -1,38 +1,40 @@
+# app/main.py
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import threading
+import logging
 
 from app.config.settings import settings
 from app.delivery.api.computer_vision import router
 from app.domain.template_service import TemplateService
 from app.domain.yolo_processor import YOLOProcessor
 
+logging.getLogger("ultralytics").setLevel(logging.WARNING)
+logger = logging.getLogger("uvicorn.error")
+
 # --- Lazy service bootstrap state ---
 _service_lock = threading.Lock()
 _service_ready = False
 
 def _ensure_service(app: FastAPI) -> None:
-    """
-    Initialize YOLO + TemplateService exactly once, on-demand.
-    Safe to call concurrently; only the first caller does real work.
-    """
     global _service_ready
     if _service_ready:
         return
     with _service_lock:
-        if _service_ready:
+        if _service_ready: # Double-check after acquiring the lock
             return
+        logger.info("Memulai inisialisasi TemplateService dan YOLOProcessor (lazy-init)...")
         yolo_processor = YOLOProcessor()
         app.state.template_service = TemplateService(yolo=yolo_processor)
         _service_ready = True
-        print("✅ YOLO + TemplateService initialized (lazy).")
+        logger.info("Inisialisasi service selesai.")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("🚀 Starting ML Service (lazy init enabled)…")
+    logger.info(f"ML Service '{settings.PROJECT_NAME}' dimulai (mode: {settings.ENVIRONMENT}).")
     yield
-    print("🛑 Shutting down ML Service…")
+    logger.info("ML Service berhenti.")
 
 app = FastAPI(
     title="ML Computer Vision Service",
@@ -55,6 +57,7 @@ app.add_middleware(
 # Lazy-load only for API routes
 @app.middleware("http")
 async def lazy_boot(request: Request, call_next):
+    # Inisialisasi service hanya jika path request berada di bawah API_V1_STR
     if request.url.path.startswith(settings.API_V1_STR):
         _ensure_service(request.app)
     return await call_next(request)
@@ -69,11 +72,3 @@ async def root():
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "service": "ml-computer-vision", "model_loaded": _service_ready}
-
-@app.get("/health/cloudinary")
-def cloudinary_health():
-    if not (settings.CLOUDINARY_URL or (
-        settings.CLOUDINARY_CLOUD_NAME and settings.CLOUDINARY_API_KEY and settings.CLOUDINARY_API_SECRET
-    )):
-        raise HTTPException(500, "Cloudinary credentials not configured")
-    return {"status": "ok"}

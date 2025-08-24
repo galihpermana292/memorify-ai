@@ -19,10 +19,8 @@ _service_ready = False
 
 def _ensure_service(app: FastAPI) -> None:
     global _service_ready
-    if _service_ready:
-        return
-    with _service_lock:
-        if _service_ready: # Double-check after acquiring the lock
+    with _service_lock:  # Always acquire lock first
+        if _service_ready:
             return
         logger.info("Memulai inisialisasi TemplateService dan YOLOProcessor (lazy-init)...")
         yolo_processor = YOLOProcessor()

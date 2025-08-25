@@ -36,7 +36,6 @@ if not logger.handlers:
 
 class TemplateService:
     def __init__(self, yolo: YOLOProcessor, cpu_executor: ProcessPoolExecutor, io_executor: ThreadPoolExecutor):
-        self.yolo_processor = yolo
         self.cpu_executor = cpu_executor
         self.io_executor = io_executor
 
@@ -77,7 +76,9 @@ class TemplateService:
     def _crop_one(self, img_bytes: bytes, slot) -> Image.Image:
         if img_bytes is None:
             return None
-        
+
+        yolo_processor = YOLOProcessor()
+
         img_cv = self._decode_cv(img_bytes)
         if img_cv is None:
             logger.warning("Gagal decode gambar, proses crop dilewati.")
@@ -86,7 +87,7 @@ class TemplateService:
         slot_dict = slot.model_dump()
         cropped_pil = None
         try:
-            cropped_pil = self.yolo_processor.crop_person(img_cv, int(slot_dict['w']), int(slot_dict['h']))
+            cropped_pil = yolo_processor.crop_person(img_cv, int(slot_dict['w']), int(slot_dict['h']))
         finally:
             del img_cv
             

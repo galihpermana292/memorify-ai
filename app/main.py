@@ -40,7 +40,7 @@ async def lifespan(app: FastAPI):
         logger.info("ML Service berhenti.")
 
 app = FastAPI(
-    title="ML Computer Vision Service",
+    title="Memo AI 1.0 Computer Vision Service",
     description="Machine Learning service for computer vision tasks including frame detection, smart cropping, and photo insertion",
     version="1.0.0",
     lifespan=lifespan,

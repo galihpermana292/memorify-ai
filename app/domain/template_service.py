@@ -75,7 +75,6 @@ class TemplateService:
             img = cv2.resize(img, (int(w*scale), int(h*scale)), interpolation=cv2.INTER_AREA)
         return img
 
-    # NOTE: uses self.yolo (your singleton) — no model recreated per slot
     def _crop_one(self, img_bytes: Optional[bytes], slot) -> Optional[Image.Image]:
         if img_bytes is None:
             return None

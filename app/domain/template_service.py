@@ -7,6 +7,7 @@ import numpy as np, cv2
 from PIL import Image
 import asyncio
 import aiohttp
+import psutil
 import aiofiles
 import gc
 from concurrent.futures import ThreadPoolExecutor
@@ -160,76 +161,145 @@ class TemplateService:
 
     async def process_template(self, template_data: TemplateData) -> Dict:
         run_id = template_data.id
-        logger.info(f"Memulai pemrosesan untuk Run ID: {run_id}")
+        logger.info(f"=== START PROCESSING Run ID: {run_id} ===")
+        try:
+            process = psutil.Process(os.getpid())
+            memory_mb = process.memory_info().rss / 1024 / 1024
+            logger.info(f"Memory usage at start: {memory_mb:.1f}MB for Run ID: {run_id}")
+        except Exception as mem_error:
+            logger.warning(f"Could not get memory info: {mem_error}")
+        
         overall_start_time = time.perf_counter()
         
-        results = {"run_id": run_id, "pages": [], "errors": []}
-        page_keys_sorted = sorted(template_data.frame_images.keys(), key=int)
-        
-        pages_with_slots = {k: v for k, v in template_data.frame_images.items() if v.photo_slots}
-        all_slots = [slot for k in sorted(pages_with_slots.keys()) for slot in pages_with_slots[k].photo_slots]
-        
-        # TAHAP 1: Download Aset
-        logger.info(f"Tahap 1/4: Mengunduh {len(template_data.uploaded_images)} gambar pengguna dan {len(page_keys_sorted)} frame.")
-        user_img_sources = template_data.uploaded_images
-        frame_img_sources = [template_data.frame_images[k].frame_image_path for k in page_keys_sorted]
-        all_user_bytes, all_frame_bytes_list = await asyncio.gather(
-            self._load_many_bytes_async(user_img_sources),
-            self._load_many_bytes_async(frame_img_sources)
-        )
-        all_frame_bytes_dict = dict(zip(page_keys_sorted, all_frame_bytes_list))
-        
-        # TAHAP 2: Smart Cropping
-        all_cropped_photos = []
-        crop_duration = 0
-        if pages_with_slots:
-            logger.info(f"Tahap 2/4: Melakukan smart-cropping untuk {len(all_slots)} slot.")
-            crop_start_time = time.perf_counter()
-            all_cropped_photos = await self._crop_photos_for_slots_parallel_async(all_user_bytes, all_slots)
-            crop_duration = time.perf_counter() - crop_start_time
-            logger.info(f"Tahap 2/4: Cropping selesai dalam {crop_duration:.2f} detik.")
-        else:
-            logger.info("Tahap 2/4: Tidak ada slot foto, tahap cropping dilewati.")
+        try:
+            results = {"run_id": run_id, "pages": [], "errors": []}
+            page_keys_sorted = sorted(template_data.frame_images.keys(), key=int)
             
-        # TAHAP 3: Compositing & Upload Paralel
-        logger.info("Tahap 3/4: Memulai compositing dan upload paralel.")
-        loop = asyncio.get_running_loop()
-        all_futures = []
-        upload_master_start_time = time.perf_counter()
-        
-        photo_cursor = 0
-        for k in sorted(template_data.frame_images.keys(), key=int):
-            page_config = template_data.frame_images[k]
-            if page_config.photo_slots:
-                num_slots = len(page_config.photo_slots)
-                photos_for_this_page = all_cropped_photos[photo_cursor : photo_cursor + num_slots]
-                photo_cursor += num_slots
-                fut = loop.run_in_executor(self.executor, self._composite_one_page, k, all_frame_bytes_dict.get(k), photos_for_this_page, page_config.photo_slots, page_config.svg_paths, run_id, upload_master_start_time)
+            pages_with_slots = {k: v for k, v in template_data.frame_images.items() if v.photo_slots}
+            all_slots = [slot for k in sorted(pages_with_slots.keys()) for slot in pages_with_slots[k].photo_slots]
+            
+            # TAHAP 1: Download Aset
+            logger.info(f"Tahap 1/4: Mengunduh {len(template_data.uploaded_images)} gambar pengguna dan {len(page_keys_sorted)} frame.")
+            user_img_sources = template_data.uploaded_images
+            frame_img_sources = [template_data.frame_images[k].frame_image_path for k in page_keys_sorted]
+            
+            all_user_bytes, all_frame_bytes_list = await asyncio.gather(
+                self._load_many_bytes_async(user_img_sources),
+                self._load_many_bytes_async(frame_img_sources)
+            )
+            all_frame_bytes_dict = dict(zip(page_keys_sorted, all_frame_bytes_list))
+            logger.info(f"Tahap 1/4: Download selesai untuk Run ID: {run_id}")
+            memory_mb = process.memory_info().rss / 1024 / 1024
+            logger.info(f"Memory after download: {memory_mb:.1f}MB for Run ID: {run_id}")
+            
+            # TAHAP 2: Smart Cropping
+            all_cropped_photos = []
+            crop_duration = 0
+            if pages_with_slots:
+                logger.info(f"Tahap 2/4: Melakukan smart-cropping untuk {len(all_slots)} slot.")
+                crop_start_time = time.perf_counter()
+                all_cropped_photos = await self._crop_photos_for_slots_parallel_async(all_user_bytes, all_slots)
+                crop_duration = time.perf_counter() - crop_start_time
+                logger.info(f"Tahap 2/4: Cropping selesai dalam {crop_duration:.2f} detik untuk Run ID: {run_id}")
+                memory_mb = process.memory_info().rss / 1024 / 1024
+                logger.info(f"Memory after cropping: {memory_mb:.1f}MB for Run ID: {run_id}")
             else:
-                fut = loop.run_in_executor(self.executor, self._upload_static_page, k, all_frame_bytes_dict.get(k), run_id, upload_master_start_time)
-            all_futures.append(fut)
-        
-        total_upload_work_time = 0.0
-        for fut in asyncio.as_completed(all_futures):
+                logger.info(f"Tahap 2/4: Tidak ada slot foto, tahap cropping dilewati untuk Run ID: {run_id}")
+                
+            # TAHAP 3: Compositing & Upload Paralel
+            logger.info(f"Tahap 3/4: Memulai compositing dan upload paralel untuk Run ID: {run_id}")
+            loop = asyncio.get_running_loop()
+            all_futures = []
+            upload_master_start_time = time.perf_counter()
+            
+            # Create futures
+            photo_cursor = 0
+            for k in sorted(template_data.frame_images.keys(), key=int):
+                page_config = template_data.frame_images[k]
+                if page_config.photo_slots:
+                    num_slots = len(page_config.photo_slots)
+                    photos_for_this_page = all_cropped_photos[photo_cursor : photo_cursor + num_slots]
+                    photo_cursor += num_slots
+                    fut = loop.run_in_executor(
+                        self.executor, 
+                        self._composite_one_page, 
+                        k, 
+                        all_frame_bytes_dict.get(k), 
+                        photos_for_this_page, 
+                        page_config.photo_slots, 
+                        page_config.svg_paths, 
+                        run_id, 
+                        upload_master_start_time
+                    )
+                else:
+                    fut = loop.run_in_executor(
+                        self.executor, 
+                        self._upload_static_page, 
+                        k, 
+                        all_frame_bytes_dict.get(k), 
+                        run_id, 
+                        upload_master_start_time
+                    )
+                all_futures.append(fut)
+            
+            logger.info(f"Created {len(all_futures)} futures for Run ID: {run_id}")
+            
+            # Process futures with timeout and better error handling
+            total_upload_work_time = 0.0
+            completed_count = 0
+            failed_count = 0
+            
             try:
-                page_idx, url, duration = await fut
-                total_upload_work_time += duration
-                if url: results["pages"].append({"index": page_idx, "url": url})
-            except Exception as e:
-                logger.error(f"Terjadi error pada salah satu worker: {traceback.format_exc()}")
-                results["errors"].append({"error": f"{type(e).__name__}: {e}"})
-
-        upload_wall_time = time.perf_counter() - upload_master_start_time
-        logger.info(f"Tahap 3/4: Upload paralel selesai. Waktu proses: {upload_wall_time:.2f} detik.")
-        
-        # TAHAP 4: Finalisasi
-        logger.info("Tahap 4/4: Finalisasi hasil.")
-        results["pages"].sort(key=lambda x: x["index"])
-        
-        overall_duration = time.perf_counter() - overall_start_time
-        
-        del all_cropped_photos, all_frame_bytes_dict, all_user_bytes, all_futures, all_slots
-        gc.collect()
-        
-        logger.info(f"Pemrosesan untuk Run ID: {run_id} selesai dalam {overall_duration:.2f} detik.")
-        return results
+                # Add overall timeout for all futures
+                async with asyncio.timeout(300):  # 5 minute timeout for all processing
+                    for fut in asyncio.as_completed(all_futures):
+                        try:
+                            page_idx, url, duration = await fut
+                            total_upload_work_time += duration
+                            completed_count += 1
+                            
+                            if url:
+                                results["pages"].append({"index": page_idx, "url": url})
+                                logger.info(f"Page {page_idx} completed successfully for Run ID: {run_id} ({completed_count}/{len(all_futures)})")
+                            else:
+                                logger.warning(f"Page {page_idx} completed but no URL returned for Run ID: {run_id}")
+                                
+                        except Exception as e:
+                            failed_count += 1
+                            logger.error(f"Future failed for Run ID {run_id}: {e}\n{traceback.format_exc()}")
+                            results["errors"].append({"error": f"{type(e).__name__}: {e}"})
+            
+            except asyncio.TimeoutError:
+                logger.error(f"TIMEOUT: Processing exceeded 5 minutes for Run ID: {run_id}")
+                # Cancel remaining futures
+                for fut in all_futures:
+                    if not fut.done():
+                        fut.cancel()
+                results["errors"].append({"error": "Processing timeout after 5 minutes"})
+                
+            logger.info(f"Futures completed: {completed_count}, failed: {failed_count}, total: {len(all_futures)} for Run ID: {run_id}")
+            
+            upload_wall_time = time.perf_counter() - upload_master_start_time
+            logger.info(f"Tahap 3/4: Upload paralel selesai. Waktu proses: {upload_wall_time:.2f} detik untuk Run ID: {run_id}")
+            memory_mb = process.memory_info().rss / 1024 / 1024
+            logger.info(f"Memory after upload: {memory_mb:.1f}MB for Run ID: {run_id}")
+            
+            # TAHAP 4: Finalisasi
+            logger.info(f"Tahap 4/4: Finalisasi hasil untuk Run ID: {run_id}")
+            results["pages"].sort(key=lambda x: x["index"])
+            
+            overall_duration = time.perf_counter() - overall_start_time
+            
+            # Cleanup
+            try:
+                del all_cropped_photos, all_frame_bytes_dict, all_user_bytes, all_futures, all_slots
+                gc.collect()
+            except Exception as cleanup_error:
+                logger.warning(f"Cleanup error for Run ID {run_id}: {cleanup_error}")
+            
+            logger.info(f"=== COMPLETED PROCESSING Run ID: {run_id} dalam {overall_duration:.2f} detik ===")
+            return results
+            
+        except Exception as e:
+            logger.error(f"=== CRITICAL ERROR in process_template for Run ID {run_id}: {e}\n{traceback.format_exc()} ===")
+            raise

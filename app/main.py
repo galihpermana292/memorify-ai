@@ -2,6 +2,7 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+from concurrent.futures import ThreadPoolExecutor
 import threading
 import logging
 
@@ -24,14 +25,21 @@ def _ensure_service(app: FastAPI) -> None:
             return
         logger.info("Memulai inisialisasi TemplateService dan YOLOProcessor (lazy-init)...")
         yolo_processor = YOLOProcessor()
-        app.state.template_service = TemplateService(yolo=yolo_processor)
+        app.state.template_service = TemplateService(
+            yolo=yolo_processor,
+            executor=app.state.executor
+        )
         _service_ready = True
         logger.info("Inisialisasi service selesai.")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    app.state.executor = ThreadPoolExecutor()
     logger.info(f"ML Service '{settings.PROJECT_NAME}' dimulai (mode: {settings.ENVIRONMENT}).")
+    logger.info("Shared ThreadPoolExecutor telah dibuat.")
     yield
+    logger.info("Menutup ThreadPoolExecutor...")
+    app.state.executor.shutdown(wait=True)
     logger.info("ML Service berhenti.")
 
 app = FastAPI(

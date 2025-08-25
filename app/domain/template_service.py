@@ -109,9 +109,8 @@ class TemplateService:
 
         tasks = list(zip(images_to_process[:num_slots], slots))
         loop = asyncio.get_running_loop()
-        with ThreadPoolExecutor() as executor:
-            futures = [loop.run_in_executor(executor, self._crop_one, img_b, slot) for img_b, slot in tasks]
-            return await asyncio.gather(*futures)
+        futures = [loop.run_in_executor(self.executor, self._crop_one, img_b, slot) for img_b, slot in tasks]
+        return await asyncio.gather(*futures)
 
     def _upload_static_page(self, index_str: str, frame_bytes: bytes, out_id: str, master_start_time: float) -> Tuple[int, str, float]:
         if frame_bytes is None: raise ValueError(f"Frame untuk halaman statis {index_str} tidak bisa dimuat.")
@@ -197,18 +196,17 @@ class TemplateService:
         all_futures = []
         upload_master_start_time = time.perf_counter()
         
-        with ThreadPoolExecutor() as executor:
-            photo_cursor = 0
-            for k in sorted(template_data.frame_images.keys(), key=int):
-                page_config = template_data.frame_images[k]
-                if page_config.photo_slots:
-                    num_slots = len(page_config.photo_slots)
-                    photos_for_this_page = all_cropped_photos[photo_cursor : photo_cursor + num_slots]
-                    photo_cursor += num_slots
-                    fut = loop.run_in_executor(executor, self._composite_one_page, k, all_frame_bytes_dict.get(k), photos_for_this_page, page_config.photo_slots, page_config.svg_paths, run_id, upload_master_start_time)
-                else:
-                    fut = loop.run_in_executor(executor, self._upload_static_page, k, all_frame_bytes_dict.get(k), run_id, upload_master_start_time)
-                all_futures.append(fut)
+        photo_cursor = 0
+        for k in sorted(template_data.frame_images.keys(), key=int):
+            page_config = template_data.frame_images[k]
+            if page_config.photo_slots:
+                num_slots = len(page_config.photo_slots)
+                photos_for_this_page = all_cropped_photos[photo_cursor : photo_cursor + num_slots]
+                photo_cursor += num_slots
+                fut = loop.run_in_executor(self.executor, self._composite_one_page, k, all_frame_bytes_dict.get(k), photos_for_this_page, page_config.photo_slots, page_config.svg_paths, run_id, upload_master_start_time)
+            else:
+                fut = loop.run_in_executor(self.executor, self._upload_static_page, k, all_frame_bytes_dict.get(k), run_id, upload_master_start_time)
+            all_futures.append(fut)
         
         total_upload_work_time = 0.0
         for fut in asyncio.as_completed(all_futures):

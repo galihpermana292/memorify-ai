@@ -76,7 +76,9 @@ class TemplateService:
         return img
 
     def _crop_one(self, img_bytes: bytes, slot) -> Image.Image:
-        if img_bytes is None: return None
+        if img_bytes is None:
+            return None
+        
         img_cv = self._decode_cv(img_bytes)
         if img_cv is None:
             logger.warning("Gagal decode gambar, proses crop dilewati.")
@@ -92,9 +94,7 @@ class TemplateService:
             
         if cropped_pil is None:
             logger.warning("Cropping gagal, mengembalikan None.")
-            return None
-            
-        del img_cv
+        
         return cropped_pil
 
     async def _crop_photos_for_slots_parallel_async(self, images_bytes: List[bytes], slots) -> List[Image.Image]:

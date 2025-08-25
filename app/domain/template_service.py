@@ -10,7 +10,7 @@ import aiohttp
 import psutil
 import aiofiles
 import gc
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
 from app.delivery.schemas.body import TemplateData
 from app.infrastructure.cv import image_process
@@ -35,9 +35,8 @@ if not logger.handlers:
     logger.propagate = False # Mencegah log ganda ke root logger
 
 class TemplateService:
-    def __init__(self, yolo: YOLOProcessor, cpu_executor: ThreadPoolExecutor, io_executor: ThreadPoolExecutor):
+    def __init__(self, yolo: YOLOProcessor, cpu_executor: ProcessPoolExecutor, io_executor: ThreadPoolExecutor):
         self.yolo_processor = yolo
-        self.yolo_lock = threading.Lock()
         self.cpu_executor = cpu_executor
         self.io_executor = io_executor
 
@@ -87,8 +86,7 @@ class TemplateService:
         slot_dict = slot.model_dump()
         cropped_pil = None
         try:
-            with self.yolo_lock:
-                cropped_pil = self.yolo_processor.crop_person(img_cv, int(slot_dict['w']), int(slot_dict['h']))
+            cropped_pil = self.yolo_processor.crop_person(img_cv, int(slot_dict['w']), int(slot_dict['h']))
         finally:
             del img_cv
             

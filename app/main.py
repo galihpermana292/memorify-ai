@@ -2,7 +2,7 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import threading
 import logging
 import os
@@ -18,10 +18,10 @@ logger = logging.getLogger("uvicorn.error")
 # --- Application lifespan for resource management ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    cpu_workers = min(os.cpu_count() or 1, 4)
+    cpu_workers = os.cpu_count() or 1
     io_workers = min(cpu_workers * 2, 8)
-
-    app.state.cpu_executor = ThreadPoolExecutor(max_workers=cpu_workers)
+  
+    app.state.cpu_executor = ProcessPoolExecutor(max_workers=cpu_workers)
     app.state.io_executor = ThreadPoolExecutor(max_workers=io_workers)
     
     logger.info("Memulai inisialisasi TemplateService dan YOLOProcessor...")

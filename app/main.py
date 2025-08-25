@@ -1,9 +1,8 @@
 # app/main.py
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
-import threading
 import logging
 import os
 
@@ -15,31 +14,30 @@ from app.domain.yolo_processor import YOLOProcessor
 logging.getLogger("ultralytics").setLevel(logging.WARNING)
 logger = logging.getLogger("uvicorn.error")
 
-# --- Application lifespan for resource management ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    cpu_workers = min(os.cpu_count() or 1, 4)
-    io_workers = min(cpu_workers * 2, 8)
-
+    cpu_workers = max(2, (os.cpu_count() or 1))      
+    io_workers  = min(cpu_workers * 2, 16)               
     app.state.cpu_executor = ThreadPoolExecutor(max_workers=cpu_workers)
-    app.state.io_executor = ThreadPoolExecutor(max_workers=io_workers)
-    
+    app.state.io_executor  = ThreadPoolExecutor(max_workers=io_workers)
+
     logger.info("Memulai inisialisasi TemplateService dan YOLOProcessor...")
     yolo_processor = YOLOProcessor()
-    
+
     app.state.template_service = TemplateService(
         yolo=yolo_processor,
         cpu_executor=app.state.cpu_executor,
-        io_executor=app.state.io_executor
+        io_executor=app.state.io_executor,
     )
     logger.info("Inisialisasi service selesai.")
-    
-    yield
-    
-    logger.info("Menutup ThreadPoolExecutors...")
-    app.state.cpu_executor.shutdown(wait=True)
-    app.state.io_executor.shutdown(wait=True)
-    logger.info("ML Service berhenti.")
+
+    try:
+        yield
+    finally:
+        logger.info("Menutup ThreadPoolExecutors...")
+        app.state.cpu_executor.shutdown(wait=True, cancel_futures=True)
+        app.state.io_executor.shutdown(wait=True, cancel_futures=True)
+        logger.info("ML Service berhenti.")
 
 app = FastAPI(
     title="ML Computer Vision Service",
@@ -50,9 +48,6 @@ app = FastAPI(
     redoc_url="/redoc" if settings.ENVIRONMENT != "production" else None,
 )
 
-# --- Middleware and API Endpoints ---
-
-# CORS setup for handling cross-origin requests
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_HOSTS,
@@ -61,7 +56,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Your API routes are included here
 app.include_router(router, prefix=settings.API_V1_STR)
 
 @app.get("/")

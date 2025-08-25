@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 import threading
 import logging
+import os
 
 from app.config.settings import settings
 from app.delivery.api.computer_vision import router
@@ -34,9 +35,10 @@ def _ensure_service(app: FastAPI) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.executor = ThreadPoolExecutor()
+    max_workers = min(4, os.cpu_count() or 1)  # Conservative limit
+    app.state.executor = ThreadPoolExecutor(max_workers=max_workers)
     logger.info(f"ML Service '{settings.PROJECT_NAME}' dimulai (mode: {settings.ENVIRONMENT}).")
-    logger.info("Shared ThreadPoolExecutor telah dibuat.")
+    logger.info(f"Shared ThreadPoolExecutor dibuat dengan {max_workers} workers.")
     yield
     logger.info("Menutup ThreadPoolExecutor...")
     app.state.executor.shutdown(wait=True)
@@ -73,8 +75,8 @@ app.include_router(router, prefix=settings.API_V1_STR)
 
 @app.get("/")
 async def root():
-    return {"message": "ML Computer Vision Service", "version": "1.0.0", "status": "ok"}
+    return {"message": "Memo AI Computer Vision Service", "version": "1.0.0", "status": "ok"}
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "service": "ml-computer-vision", "model_loaded": _service_ready}
+    return {"status": "ok", "service": "Memo AI 1.0", "model_loaded": _service_ready}

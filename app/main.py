@@ -21,27 +21,35 @@ _service_ready = False
 
 def _ensure_service(app: FastAPI) -> None:
     global _service_ready
-    with _service_lock:  # Always acquire lock first
+    with _service_lock:
         if _service_ready:
             return
         logger.info("Memulai inisialisasi TemplateService dan YOLOProcessor (lazy-init)...")
         yolo_processor = YOLOProcessor()
         app.state.template_service = TemplateService(
             yolo=yolo_processor,
-            executor=app.state.executor
+            cpu_executor=app.state.cpu_executor,
+            io_executor=app.state.io_executor
         )
         _service_ready = True
         logger.info("Inisialisasi service selesai.")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    max_workers = min(4, os.cpu_count() or 1)  # Conservative limit
-    app.state.executor = ThreadPoolExecutor(max_workers=max_workers)
-    logger.info(f"ML Service '{settings.PROJECT_NAME}' dimulai (mode: {settings.ENVIRONMENT}).")
-    logger.info(f"Shared ThreadPoolExecutor dibuat dengan {max_workers} workers.")
+    cpu_workers = min(os.cpu_count() or 1, 4)
+    app.state.cpu_executor = ThreadPoolExecutor(max_workers=cpu_workers)
+    
+    io_workers = min(cpu_workers * 2, 8)
+    app.state.io_executor = ThreadPoolExecutor(max_workers=io_workers)
+
+    logger.info(f"Shared ThreadPoolExecutor for CPU created with {cpu_workers} workers.")
+    logger.info(f"Shared ThreadPoolExecutor for I/O created with {io_workers} workers.")
+    
     yield
-    logger.info("Menutup ThreadPoolExecutor...")
-    app.state.executor.shutdown(wait=True)
+    
+    logger.info("Menutup ThreadPoolExecutors...")
+    app.state.cpu_executor.shutdown(wait=True)
+    app.state.io_executor.shutdown(wait=True)
     logger.info("ML Service berhenti.")
 
 app = FastAPI(

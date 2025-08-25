@@ -35,10 +35,11 @@ if not logger.handlers:
     logger.propagate = False # Mencegah log ganda ke root logger
 
 class TemplateService:
-    def __init__(self, yolo: YOLOProcessor, executor: ThreadPoolExecutor):
+    def __init__(self, yolo: YOLOProcessor, cpu_executor: ThreadPoolExecutor, io_executor: ThreadPoolExecutor):
         self.yolo_processor = yolo
         self.yolo_lock = threading.Lock()
-        self.executor = executor
+        self.cpu_executor = cpu_executor
+        self.io_executor = io_executor
 
     async def _load_image_bytes_async(self, src: str, session: aiohttp.ClientSession) -> bytes:
         try:
@@ -82,9 +83,13 @@ class TemplateService:
             return None
         
         slot_dict = slot.model_dump()
-        with self.yolo_lock:
-            cropped_pil = self.yolo_processor.crop_person(img_cv, int(slot_dict['w']), int(slot_dict['h']))
-
+        cropped_pil = None
+        try:
+            with self.yolo_lock:
+                cropped_pil = self.yolo_processor.crop_person(img_cv, int(slot_dict['w']), int(slot_dict['h']))
+        finally:
+            del img_cv
+            
         if cropped_pil is None:
             logger.warning("Cropping gagal, mengembalikan None.")
             return None
@@ -111,7 +116,7 @@ class TemplateService:
 
         tasks = list(zip(images_to_process[:num_slots], slots))
         loop = asyncio.get_running_loop()
-        futures = [loop.run_in_executor(self.executor, self._crop_one, img_b, slot) for img_b, slot in tasks]
+        futures = [loop.run_in_executor(self.cpu_executor, self._crop_one, img_b, slot) for img_b, slot in tasks]
         return await asyncio.gather(*futures)
 
     def _upload_static_page(self, index_str: str, frame_bytes: bytes, out_id: str, master_start_time: float) -> Tuple[int, str, float]:
@@ -221,7 +226,7 @@ class TemplateService:
                     photos_for_this_page = all_cropped_photos[photo_cursor : photo_cursor + num_slots]
                     photo_cursor += num_slots
                     fut = loop.run_in_executor(
-                        self.executor, 
+                        self.cpu_executor, 
                         self._composite_one_page, 
                         k, 
                         all_frame_bytes_dict.get(k), 
@@ -233,7 +238,7 @@ class TemplateService:
                     )
                 else:
                     fut = loop.run_in_executor(
-                        self.executor, 
+                        self.io_executor, 
                         self._upload_static_page, 
                         k, 
                         all_frame_bytes_dict.get(k), 

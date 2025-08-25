@@ -12,6 +12,7 @@ import asyncio
 
 router = APIRouter()
 security = HTTPBasic()
+# Mengambil logger yang sudah ada yang dikonfigurasi oleh Uvicorn
 logger = logging.getLogger("uvicorn.error")
 
 def verify_basic_auth(creds: HTTPBasicCredentials = Depends(security)) -> None:
@@ -24,57 +25,70 @@ def verify_basic_auth(creds: HTTPBasicCredentials = Depends(security)) -> None:
             headers={"WWW-Authenticate": "Basic"},
         )
 
-ENDPOINT_TIMEOUT_SECONDS = 55
-
 @router.post("/process-template", dependencies=[Depends(verify_basic_auth)])
 async def process_template(request: Request, template_data: TemplateData):
     request_id = template_data.id
-    logger.info(f"=== ENDPOINT START for {request_id} (threads={threading.active_count()}) ===")
+    thread_count = threading.active_count()
+    logger.info(f"=== ENDPOINT START for {request_id} (Active threads: {thread_count}) ===")
 
     try:
-        service = getattr(request.app.state, "template_service", None)
-        if service is None:
+        if not hasattr(request.app.state, 'template_service'):
             logger.error(f"Service not initialized for request {request_id}")
             raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Service is not ready. Please try again in a moment.",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, 
+                detail="Service is not ready. Please try again in a moment."
             )
-
-        # Abort fast if the client already closed
-        if await request.is_disconnected():
-            logger.warning(f"[{request_id}] Client already disconnected")
-            raise HTTPException(status_code=499, detail="Client closed request")
-
+        
+        service = request.app.state.template_service
+        logger.info(f"Service retrieved for {request_id}")
+        
+        # Add timeout to the entire operation
         try:
             result = await asyncio.wait_for(
-                service.process_template(template_data, request=request),
-                timeout=ENDPOINT_TIMEOUT_SECONDS,
+                service.process_template(template_data),
+                timeout=600  # 10 minute timeout
             )
             logger.info(f"=== ENDPOINT SUCCESS for {request_id} ===")
-            return JSONResponse(status_code=200, content={"output_files": result})
-
+            
+            # Explicitly return JSONResponse
+            return JSONResponse(
+                status_code=200,
+                content={"output_files": result}
+            )
+            
         except asyncio.TimeoutError:
-            logger.error(f"=== ENDPOINT TIMEOUT for {request_id} after {ENDPOINT_TIMEOUT_SECONDS}s ===")
-            raise HTTPException(status_code=504, detail="AI processing timed out")
-
+            logger.error(f"=== ENDPOINT TIMEOUT for {request_id} ===")
+            raise HTTPException(
+                status_code=408,
+                detail="Request timeout"
+            )
+        
     except HTTPException:
+        # Re-raise HTTP exceptions as-is
         raise
     except Exception as e:
         logger.error(f"=== ENDPOINT ERROR for {request_id}: {e} ===\n{traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Terjadi kesalahan internal pada server.",
+            detail="Terjadi kesalahan internal pada server."
         )
 
 @router.get("/warm")
 async def warm(request: Request):
     svc = getattr(request.app.state, "template_service", None)
     if svc is None:
-        return {"status": "error", "message": "Service is not initialized."}
+        return { "status": "error", "message": "Service is not initialized." }
 
+    warmed = False
     try:
-        await svc.warmup()   # call the service-level warmup
-        return {"status": "ok", "model_loaded": True, "message": "Model YOLO siap digunakan."}
+        svc.yolo_processor.warmup(imgsz=416)
+        warmed = True
     except Exception as e:
         logger.error(f"Pemanasan model gagal: {e}", exc_info=True)
-        return {"status": "error", "model_loaded": False, "message": "Gagal melakukan pemanasan model."}
+        warmed = False
+
+    return {
+        "status": "ok" if warmed else "error",
+        "model_loaded": warmed,
+        "message": "Model YOLO siap digunakan." if warmed else "Gagal melakukan pemanasan model."
+    }

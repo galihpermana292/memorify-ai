@@ -30,25 +30,17 @@ async def process_template(request: Request, template_data: TemplateData):
     request_id = template_data.id
     thread_count = threading.active_count()
     logger.info(f"=== ENDPOINT START for {request_id} (Active threads: {thread_count}) ===")
-    
+
     try:
-        # Verify service is available
         if not hasattr(request.app.state, 'template_service'):
             logger.error(f"Service not initialized for request {request_id}")
             raise HTTPException(
-                status_code=500, 
-                detail="Service not available"
-            )
-        
-        if not hasattr(request.app.state, 'executor'):
-            logger.error(f"Executor not initialized for request {request_id}")
-            raise HTTPException(
-                status_code=500, 
-                detail="Executor not available"
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, 
+                detail="Service is not ready. Please try again in a moment."
             )
         
         service = request.app.state.template_service
-        logger.info(f"Service and executor retrieved for {request_id}")
+        logger.info(f"Service retrieved for {request_id}")
         
         # Add timeout to the entire operation
         try:
@@ -84,7 +76,6 @@ async def process_template(request: Request, template_data: TemplateData):
 @router.get("/warm")
 async def warm(request: Request):
     svc = getattr(request.app.state, "template_service", None)
-    # Logika _ensure_service di main.py akan menangani inisialisasi jika svc adalah None
     if svc is None:
         return { "status": "error", "message": "Service is not initialized." }
 

@@ -34,9 +34,10 @@ if not logger.handlers:
     logger.propagate = False # Mencegah log ganda ke root logger
 
 class TemplateService:
-    def __init__(self, yolo: YOLOProcessor):
+    def __init__(self, yolo: YOLOProcessor, executor: ThreadPoolExecutor):
         self.yolo_processor = yolo
         self.yolo_lock = threading.Lock()
+        self.executor = executor
 
     async def _load_image_bytes_async(self, src: str, session: aiohttp.ClientSession) -> bytes:
         try:

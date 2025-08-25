@@ -15,35 +15,24 @@ from app.domain.yolo_processor import YOLOProcessor
 logging.getLogger("ultralytics").setLevel(logging.WARNING)
 logger = logging.getLogger("uvicorn.error")
 
-# --- Lazy service bootstrap state ---
-_service_lock = threading.Lock()
-_service_ready = False
-
-def _ensure_service(app: FastAPI) -> None:
-    global _service_ready
-    with _service_lock:
-        if _service_ready:
-            return
-        logger.info("Memulai inisialisasi TemplateService dan YOLOProcessor (lazy-init)...")
-        yolo_processor = YOLOProcessor()
-        app.state.template_service = TemplateService(
-            yolo=yolo_processor,
-            cpu_executor=app.state.cpu_executor,
-            io_executor=app.state.io_executor
-        )
-        _service_ready = True
-        logger.info("Inisialisasi service selesai.")
-
+# --- Application lifespan for resource management ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cpu_workers = min(os.cpu_count() or 1, 4)
-    app.state.cpu_executor = ThreadPoolExecutor(max_workers=cpu_workers)
-    
     io_workers = min(cpu_workers * 2, 8)
-    app.state.io_executor = ThreadPoolExecutor(max_workers=io_workers)
 
-    logger.info(f"Shared ThreadPoolExecutor for CPU created with {cpu_workers} workers.")
-    logger.info(f"Shared ThreadPoolExecutor for I/O created with {io_workers} workers.")
+    app.state.cpu_executor = ThreadPoolExecutor(max_workers=cpu_workers)
+    app.state.io_executor = ThreadPoolExecutor(max_workers=io_workers)
+    
+    logger.info("Memulai inisialisasi TemplateService dan YOLOProcessor...")
+    yolo_processor = YOLOProcessor()
+    
+    app.state.template_service = TemplateService(
+        yolo=yolo_processor,
+        cpu_executor=app.state.cpu_executor,
+        io_executor=app.state.io_executor
+    )
+    logger.info("Inisialisasi service selesai.")
     
     yield
     
@@ -61,7 +50,9 @@ app = FastAPI(
     redoc_url="/redoc" if settings.ENVIRONMENT != "production" else None,
 )
 
-# CORS
+# --- Middleware and API Endpoints ---
+
+# CORS setup for handling cross-origin requests
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_HOSTS,
@@ -70,15 +61,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Lazy-load only for API routes
-@app.middleware("http")
-async def lazy_boot(request: Request, call_next):
-    # Inisialisasi service hanya jika path request berada di bawah API_V1_STR
-    if request.url.path.startswith(settings.API_V1_STR):
-        _ensure_service(request.app)
-    return await call_next(request)
-
-# Include your CV router
+# Your API routes are included here
 app.include_router(router, prefix=settings.API_V1_STR)
 
 @app.get("/")
@@ -87,4 +70,4 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "service": "Memo AI 1.0", "model_loaded": _service_ready}
+    return {"status": "ok", "service": "Memo AI 1.0", "model_loaded": True}
